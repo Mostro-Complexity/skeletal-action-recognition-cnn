@@ -1,77 +1,61 @@
 """
 这个程序直接将不同关节的三位坐标作为图像的RGB分量做2维卷积
-有问题
+acc=0.70
 
 """
-
 import cv2
-# from scipy.interpolate import spline
-# TODO:插值自己实现
 import h5py
+import keras
 import numpy as np
 import tensorflow as tf
-from keras.utils import np_utils
-from keras.utils.vis_utils import plot_model
-from numpy.random import shuffle
-from sklearn.preprocessing import MinMaxScaler
-from keras.models import Sequential, Model
-from keras.layers.core import Dense, Activation, Dropout, Flatten
-from keras.layers.pooling import MaxPooling2D
-from keras.layers.convolutional import Conv2D
-from keras.optimizers import SGD, RMSprop
 from keras.initializers import TruncatedNormal, Zeros
+from keras.layers import Conv2D, Dense, Dropout, Flatten, MaxPooling2D
+from keras.models import Sequential
+from keras.optimizers import SGD
+from keras.utils import plot_model, to_categorical
+from numpy.random import shuffle
+from skimage import transform
+from sklearn.preprocessing import MinMaxScaler, StandardScaler
 
-UNIFORM_ISIZE = (60, 60)
+from util.preprocessing import (flip_img_horizontal, random_select_patch,
+                                standardize_img)
+
+RESIZE_ISIZE = (60, 60)
+INPUT_ISIZE = (52, 52)
 
 
 def build(input_shape):
     model = Sequential()
-
-    model.add(Conv2D(filters=6, kernel_size=(3, 3), input_shape=input_shape,
-                     strides=1, padding="same", activation='relu',
-                     kernel_initializer=TruncatedNormal(0, .01), name='CONV1'))
-
-    # model.add(Conv2D(filters=64, kernel_size=(3, 3), strides=1, padding="same",
-    #                  activation='relu', kernel_initializer=tf.truncated_normal_initializer(0, .05),
-    #                  name='CONV2'))
+    model.add(Conv2D(32, (3, 3), activation='relu', input_shape=input_shape,
+                     strides=1))
 
     model.add(MaxPooling2D(pool_size=(2, 2), strides=1))
 
-    model.add(Conv2D(filters=12, kernel_size=(3, 3), kernel_initializer=TruncatedNormal(0, .01),
-                     strides=1, padding="same", activation='relu', name='CONV3'))
-
-    # model.add(Conv2D(filters=128, kernel_size=(3, 3), kernel_initializer=tf.truncated_normal_initializer(0, .05),
-    #                  strides=1, padding="same", activation='relu', name='CONV4'))
+    model.add(Conv2D(64, (3, 3), activation='relu', strides=1))
 
     model.add(MaxPooling2D(pool_size=(2, 2), strides=1))
 
-    
-    # model.add(Conv2D(filters=12, kernel_size=(3, 3), kernel_initializer=TruncatedNormal(0, .01),
-    #                  strides=1, padding="same", activation='relu', name='CONV4'))
+    model.add(Dropout(0.25))
 
-    # model.add(Conv2D(filters=128, kernel_size=(3, 3), kernel_initializer=tf.truncated_normal_initializer(0, .05),
-    #                  strides=1, padding="same", activation='relu', name='CONV4'))
+    model.add(Conv2D(96, (3, 3), activation='relu', strides=1))
 
-    # model.add(MaxPooling2D(pool_size=(2, 2), strides=1))
+    model.add(MaxPooling2D(pool_size=(2, 2), strides=1))
+
+    model.add(Dropout(0.5))
 
     model.add(Flatten())
 
-    # model.add(Dense(4096, kernel_initializer=tf.truncated_normal_initializer(0, .05),
-    #                 activation='relu', name='FC1'))
-    # model.add(Dropout(0.5))
+    model.add(Dense(256, activation='relu'))
 
-    model.add(Dense(1024, activation='relu', name='FC2'))
-    # model.add(Dropout(0.2))
-    model.add(Dense(512, activation='relu', name='FC3'))
+    model.add(Dropout(0.5))
 
-
-    model.add(Dense(20, name='FC4'))
-
-    model.add(Activation('sigmoid'))
-
-    model.compile(loss='mean_squared_error',
-                  optimizer=SGD(lr=0.001), metrics=['accuracy'])
-
+    model.add(Dense(20, activation='softmax'))
+    # decay=1e-6, lr=0.00002
+    sgd = SGD(lr=0.001, decay=1e-6, momentum=0.9, nesterov=True)
+    # 论文中写的loss和这里不一样
+    # 试试categorical_crossentropy,mean_squared_error
+    model.compile(loss='categorical_crossentropy',
+                  optimizer=sgd, metrics=['accuracy'])
     return model
 
 
@@ -88,35 +72,33 @@ def split_dataset(features, action_labels, subject_labels, tr_subjects, te_subje
 
 
 def map_features(features, isize):
-    rindex = np.arange(0, features.shape[2], 3)
-    rmaps = features[:, :, rindex]
-    gmaps = features[:, :, rindex + 1]
-    bmaps = features[:, :, rindex + 2]
+    """
+    """
+    n_samples, n_frames, n_feat = features.shape
 
-    rmaps_rsp = np.empty((features.shape[0],
-                          isize[0], isize[1]), dtype=np.float32)
-    gmaps_rsp = np.empty((features.shape[0],
-                          isize[0], isize[1]), dtype=np.float32)
-    bmaps_rsp = np.empty((features.shape[0],
-                          isize[0], isize[1]), dtype=np.float32)
+    features = np.reshape(features, (-1, n_frames, n_feat//3, 3))
+    features = np.swapaxes(features, 1, 2)
+    # 插入hip_center
+    features = np.insert(features, obj=6, values=np.zeros(
+        (n_samples, n_frames, 3)), axis=1)
+    n_feat += 3
 
-    for i in range(rmaps.shape[0]):
-        rmaps[i] = MinMaxScaler().fit_transform(rmaps[i])*255
-        gmaps[i] = MinMaxScaler().fit_transform(gmaps[i])*255
-        bmaps[i] = MinMaxScaler().fit_transform(bmaps[i])*255
+    # 归一化
+    for i in range(n_samples):
+        features[i] = standardize_img(features[i])
+    features = np.uint8(features)
 
-        rmaps_rsp[i] = np.floor(cv2.resize(rmaps[i], isize))
-        gmaps_rsp[i] = np.floor(cv2.resize(gmaps[i], isize))
-        bmaps_rsp[i] = np.floor(cv2.resize(bmaps[i], isize))
+    # 调整空间结构
+    part_config = np.array([12, 10, 8, 1, 1, 3, 2, 2, 9, 11, 13, 20, 3, 4, 7, 7,
+                            5, 6, 5, 14, 16, 18, 6, 15, 17, 19])
+    features = features[:, part_config-1]
 
-    features = np.empty(
-        (features.shape[0], isize[0], isize[1], 3), dtype=np.float32)
-    features[:, :, :, 0] = bmaps_rsp
-    features[:, :, :, 1] = gmaps_rsp
-    features[:, :, :, 2] = rmaps_rsp
+    desired_features = np.empty((n_samples, isize[0], isize[0], 3), np.float32)
+    for i in range(n_samples):  # resize加缩小数值
+        desired_features[i] = transform.resize(features[i], isize)
+        # TODO:换掉这个函数
 
-    features = features.astype(np.uint8)
-    return features
+    return desired_features
 
 
 # 读取特征
@@ -126,7 +108,7 @@ f = h5py.File(
 features = np.array([f[element][:] for element in f['features'][0]])
 
 # 动作的图像表示
-features = map_features(features, UNIFORM_ISIZE)
+features = map_features(features, RESIZE_ISIZE)
 
 # 读取标签
 f = h5py.File(
@@ -138,12 +120,10 @@ print(features.shape)
 print(subject_labels.shape)
 print(action_labels.shape)
 
-# for i in range(features.shape[0]):
-#     cv2.imshow('representation of an action', features[i]) 
-#     print(action_labels[i])
-#     cv2.waitKey()
-features = features.astype(np.float32) * 10
-action_labels = np_utils.to_categorical(action_labels - 1, 20)
+# features = mean_remove(features)
+
+# features = features.astype(np.float32) / 255
+action_labels = to_categorical(action_labels - 1, 20)
 
 # 读取数据集划分方案
 f = h5py.File(
@@ -154,15 +134,21 @@ te_subjects = f['te_subjects'][:].T
 n_tr_te_splits = tr_subjects.shape[0]
 
 total_accuracy = np.empty(n_tr_te_splits, dtype=np.float32)
+n_tr_te_splits = 1
+
 
 for i in range(n_tr_te_splits):
     model = build(features.shape[1:4])
 
+    model.summary()
+
     tr_features, tr_labels, te_features, te_labels = split_dataset(
         features, action_labels, subject_labels, tr_subjects[i, :], te_subjects[i, :])
 
+    # tr_features, tr_labels = flip_img(tr_features, tr_labels)
+
     model.fit(tr_features, tr_labels,
-              batch_size=6, epochs=100, validation_data=(te_features, te_labels))
+              batch_size=18, epochs=100, validation_data=(te_features, te_labels))
 
     # model.fit(tr_features[:2], tr_labels[:2], batch_size=1, epochs=10)
 
