@@ -1,25 +1,30 @@
 """
 这个程序直接将不同关节的三位坐标作为图像的RGB分量做2维卷积
-acc=0.60
+acc稳定在0.7到0.8之间
 
 """
 import cv2
 import h5py
 import keras
 import numpy as np
+import scipy.stats as stat
 import tensorflow as tf
 from keras.initializers import TruncatedNormal, Zeros
 from keras.layers import Conv2D, Dense, Dropout, Flatten, MaxPooling2D
+from keras.layers.normalization import BatchNormalization
 from keras.models import Sequential
 from keras.optimizers import SGD
+from keras.regularizers import l1, l2
 from keras.utils import plot_model, to_categorical
-from numpy.random import shuffle
 from skimage import transform
 from sklearn.preprocessing import MinMaxScaler, StandardScaler
 
+from util.dataset_processing import rand_perm_dataset, split_dataset
 from util.preprocessing import (flip_img_horizontal, random_select_patch,
                                 standardize_img)
-from util.training import tr_x_generator, val_x_generator
+from util.training import (te_generator, tr_x_generator, trainset_generator,
+                           val_x_generator)
+
 RESIZE_ISIZE = (60, 60, 3)
 INPUT_ISIZE = (52, 52, 3)
 
@@ -27,48 +32,42 @@ INPUT_ISIZE = (52, 52, 3)
 def build(input_shape):
     model = Sequential()
     model.add(Conv2D(32, (3, 3), activation='relu', input_shape=input_shape,
-                     strides=1))
+                     strides=1, padding='same'))
 
-    model.add(MaxPooling2D(pool_size=(2, 2), strides=1))
+    model.add(MaxPooling2D(pool_size=(3, 3), strides=2))
 
-    model.add(Conv2D(64, (3, 3), activation='relu', strides=1))
+    model.add(Conv2D(32, (3, 3), activation='relu', strides=1, padding='same'))
 
-    model.add(MaxPooling2D(pool_size=(2, 2), strides=1))
+    model.add(MaxPooling2D(pool_size=(3, 3), strides=2))
 
-    model.add(Dropout(0.25))
+    model.add(BatchNormalization())
+    model.add(Dropout(0.5))
 
-    model.add(Conv2D(96, (3, 3), activation='relu', strides=1))
+    model.add(Conv2D(64, (3, 3), activation='relu', strides=1, padding='same'))
 
-    model.add(MaxPooling2D(pool_size=(2, 2), strides=1))
+    model.add(MaxPooling2D(pool_size=(3, 3), strides=2))
 
+    model.add(Conv2D(64, (3, 3), activation='relu', strides=1, padding='same'))
+
+    model.add(MaxPooling2D(pool_size=(3, 3), strides=2))
+
+    model.add(BatchNormalization())
     model.add(Dropout(0.5))
 
     model.add(Flatten())
 
-    model.add(Dense(256, activation='relu'))
+    model.add(Dense(256, activation='relu', kernel_regularizer=l2(1.e-2)))
 
-    model.add(Dropout(0.5))
+    # model.add(Dropout(0.5))
 
-    model.add(Dense(20, activation='softmax'))
+    model.add(Dense(20, activation='softmax', kernel_regularizer=l2(1.e-2)))
     # decay=1e-6, lr=0.00002
-    sgd = SGD(lr=0.001, decay=1e-6, momentum=0.9, nesterov=True)
+    sgd = SGD(lr=0.01, decay=1e-4, momentum=0.9, nesterov=True)
     # 论文中写的loss和这里不一样
     # 试试categorical_crossentropy,mean_squared_error
     model.compile(loss='categorical_crossentropy',
                   optimizer=sgd, metrics=['accuracy'])
     return model
-
-
-def split_dataset(features, action_labels, subject_labels, tr_subjects, te_subjects):
-    tr_subject_ind = np.isin(subject_labels, tr_subjects)
-    te_subject_ind = np.isin(subject_labels, te_subjects)
-
-    tr_labels = action_labels[tr_subject_ind]
-    te_labels = action_labels[te_subject_ind]
-
-    tr_features = features[tr_subject_ind]
-    te_features = features[te_subject_ind]
-    return tr_features, tr_labels, te_features, te_labels
 
 
 def map_features(features, isize):
@@ -142,7 +141,9 @@ for i in range(n_tr_te_splits):
     tr_features, tr_labels, te_features, te_labels = split_dataset(
         features, action_labels, subject_labels, tr_subjects[i, :], te_subjects[i, :])
 
-    n_action = np.unique(action_labels, axis=0).shape[0]
+    tr_features, tr_labels = rand_perm_dataset(tr_features, tr_labels)
+
+    n_actions = np.unique(action_labels, axis=0).shape[0]
     n_tr_samples = tr_labels.shape[0]
     n_te_samples = te_labels.shape[0]
     # each group uses one original sample
@@ -151,28 +152,31 @@ for i in range(n_tr_te_splits):
 
     tr_gen = tr_x_generator(tr_features, tr_labels,
                             RESIZE_ISIZE, INPUT_ISIZE,
-                            n_action, n_tr_samples,
+                            n_actions, n_tr_samples,
                             batch_size, n_group)
     val_gen = val_x_generator(te_features, te_labels,
                               RESIZE_ISIZE, INPUT_ISIZE,
-                              n_action, n_te_samples,
+                              n_actions, n_te_samples,
                               batch_size, n_group)
 
-    model.fit_generator(tr_gen, steps_per_epoch=n_tr_samples//n_group,
+    # model.fit_generator(tr_gen, steps_per_epoch=n_tr_samples//n_group,
+    #                     epochs=epochs, validation_data=val_gen,
+    #                     validation_steps=300)
+
+    n_orig_samples_per_step, steps_per_epoch = 7, 0
+
+    if n_tr_samples % n_orig_samples_per_step == 0:
+        steps_per_epoch = n_tr_samples//n_orig_samples_per_step
+    else:
+        steps_per_epoch = n_tr_samples//n_orig_samples_per_step+1
+    steps_per_epoch *= 41
+    
+    tr_gen = trainset_generator(tr_features, tr_labels,
+                                RESIZE_ISIZE, INPUT_ISIZE,
+                                n_actions, n_tr_samples,
+                                n_orig_samples_per_step)
+
+    model.fit_generator(tr_gen, steps_per_epoch=n_tr_samples,
                         epochs=epochs, validation_data=val_gen,
                         validation_steps=300)
-    # model.fit(tr_features, tr_labels,
-    #           batch_size=18, epochs=100, validation_data=(te_features, te_labels))
-
-    # pr_labels = model.predict(te_features)
-    # pr_labels = np.argmax(pr_labels, axis=-1) + 1
-
-    # te_labels = np.argmax(te_labels, axis=-1) + 1
-
-    # total_accuracy[i] = np.sum(pr_labels == te_labels) / te_labels.size
-#     print('split %d is done, accuracy:%f' %
-#           (i + 1, total_accuracy[i]))
-
-#     # tf.reset_default_graph()
-# print('all splits is done, avg accuracy:%f' %
-#       (total_accuracy.mean()))
+ 

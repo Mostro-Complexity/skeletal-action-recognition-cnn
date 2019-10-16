@@ -1,7 +1,8 @@
 import numpy as np
+from skimage import transform
 
 
-def map_img(mat,resize_isize):
+def map_img(mat, resize_isize):
     '''map skeletal action to rgb image
     :param mat: (n_frames, feat_dim)
     :return: (60, 60, 3)
@@ -16,9 +17,10 @@ def map_img(mat,resize_isize):
     part_config = np.array([12, 10, 8, 1, 1, 3, 2, 2, 9, 11, 13, 20, 3, 4, 7, 7,
                             5, 6, 5, 14, 16, 18, 6, 15, 17, 19])
     mat = mat[part_config - 1]
-    rgb_image = standardize_img(mat)
+    # TODO:以下代码替换
+    rgb_image = np.uint8(standardize_img(mat))
     rgb_image = transform.resize(
-    rgb_image, (resize_isize[0], resize_isize[1], 3))
+        rgb_image, (resize_isize[0], resize_isize[1], 3))
     return rgb_image
 
 
@@ -42,9 +44,11 @@ def flip_img_horizontal(mat, flip_prob=0.6):
         return np.fliplr(mat)
 
 
-def random_select_patch(mat, resize_isize, input_isize, number=5):
+def random_select_patch(mat, input_isize, number=5):
     '''randomly select $number$ patch from image
     '''
+    resize_isize = mat.shape[:2]
+
     patches = np.zeros(
         shape=(number, input_isize[0], input_isize[1], 3))
     height = resize_isize[1]-input_isize[1]
@@ -58,9 +62,11 @@ def random_select_patch(mat, resize_isize, input_isize, number=5):
     return patches
 
 
-def corner_select_patch(mat, resize_isize, input_isize, number=5):
+def corner_select_patch(mat, input_isize, number=5):
     '''select the patches from four corners and center
     '''
+    resize_isize = mat.shape[:2]
+
     patches = np.zeros(shape=(number, input_isize[0],
                               input_isize[1], 3), dtype=np.float32)
     height = resize_isize[1]-input_isize[1]
