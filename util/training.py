@@ -116,43 +116,39 @@ def val_x_generator(te_features, te_labels,
 
 
 def te_generator(te_features, te_labels,
-                 n_te_samples, n_actions,
                  resize_isize, input_isize,
+                 n_actions, n_te_samples,
                  batch_size=35, n_group=7):
     '''
-    here we trick and use test set as validation set since the train set is too small in cross-view exp
-    :return:
+    select five patches from the four corner and center and their horizontal flip to evaluate. Using the voting result
+    as the final result
+    :return: (ret_x, ret_y) with the shape ret_x ~ (10, weight, height, 3), (10, num_actions)
     '''
-    validate_max_size = n_te_samples
+    anchor = 0
+    n_samples_in_group = batch_size//n_group
     while True:
-        n_samples_in_group = batch_size // n_group
-
-        ret_x = np.zeros(shape=(2*n_samples_in_group,
-                                input_isize[0],
-                                input_isize[1], 3),
-                         dtype=np.float32)
-
+        ret_x = np.zeros(shape=(2*n_samples_in_group, input_isize[0],
+                                input_isize[1], 3), dtype=np.float32)
         ret_y = np.zeros(
-            shape=(2*n_samples_in_group, n_actions),
-            dtype=np.float32)
-
-        # random_select = random.sample(range(validate_max_size), 1)[0]
-        random_select = np.random.randint(validate_max_size)
-
+            shape=(2*n_samples_in_group, n_actions), dtype=np.float32)
+        if anchor > n_te_samples-1:
+            print('Test traversal has been done !')
+            break
         # rgb with shape (60, 60, 3)
-        rgb_img = map_img(te_features[random_select], resize_isize)
+        rgb_img = map_img(te_features[anchor], resize_isize)
 
-        clips = corner_select_patch(rgb_img,
-                                    input_isize)
+        clips = corner_select_patch(rgb_img, input_isize)
         flip_clips = corner_select_patch(
-            flip_img_horizontal(rgb_img, flip_prob=1.00),
-            input_isize)
+            flip_img_horizontal(rgb_img, flip_prob=1.00), input_isize)
+        # flip_clips = clips
 
         ret_x[0:n_samples_in_group] = clips
         ret_x[n_samples_in_group:] = flip_clips
-        label = te_labels[random_select]
+        label = te_labels[anchor]
         label = label[np.newaxis, :]
         labels = np.tile(label, reps=[2*n_samples_in_group, 1])
-        ret_y = labels
+        ret_y[:] = labels
+        anchor += 1
+        # print(anchor)
 
         yield (ret_x, ret_y)

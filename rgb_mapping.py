@@ -1,74 +1,73 @@
 """
 这个程序直接将不同关节的三位坐标作为图像的RGB分量做2维卷积
-acc=0.70
+acc稳定在0.7到0.8之间
 
 """
 import cv2
 import h5py
 import keras
 import numpy as np
+import scipy.stats as stat
 import tensorflow as tf
 from keras.initializers import TruncatedNormal, Zeros
 from keras.layers import Conv2D, Dense, Dropout, Flatten, MaxPooling2D
+from keras.layers.normalization import BatchNormalization
 from keras.models import Sequential
 from keras.optimizers import SGD
+from keras.regularizers import l1, l2
 from keras.utils import plot_model, to_categorical
-from numpy.random import shuffle
 from skimage import transform
 from sklearn.preprocessing import MinMaxScaler, StandardScaler
 
+from util.dataset_processing import rand_perm_dataset, split_dataset
 from util.preprocessing import (flip_img_horizontal, random_select_patch,
                                 standardize_img)
+from util.training import (te_generator, tr_x_generator, trainset_generator,
+                           val_x_generator)
 
-RESIZE_ISIZE = (60, 60)
-INPUT_ISIZE = (52, 52)
+RESIZE_ISIZE = (60, 60, 3)
+INPUT_ISIZE = (52, 52, 3)
 
 
 def build(input_shape):
     model = Sequential()
     model.add(Conv2D(32, (3, 3), activation='relu', input_shape=input_shape,
-                     strides=1))
+                     strides=1, padding='same'))
 
-    model.add(MaxPooling2D(pool_size=(2, 2), strides=1))
+    model.add(MaxPooling2D(pool_size=(3, 3), strides=2))
 
-    model.add(Conv2D(64, (3, 3), activation='relu', strides=1))
+    model.add(Conv2D(32, (3, 3), activation='relu', strides=1, padding='same'))
 
-    model.add(MaxPooling2D(pool_size=(2, 2), strides=1))
+    model.add(MaxPooling2D(pool_size=(3, 3), strides=2))
 
-    model.add(Dropout(0.25))
+    model.add(BatchNormalization())
+    model.add(Dropout(0.5))
 
-    model.add(Conv2D(96, (3, 3), activation='relu', strides=1))
+    model.add(Conv2D(64, (3, 3), activation='relu', strides=1, padding='same'))
 
-    model.add(MaxPooling2D(pool_size=(2, 2), strides=1))
+    model.add(MaxPooling2D(pool_size=(3, 3), strides=2))
 
+    model.add(Conv2D(64, (3, 3), activation='relu', strides=1, padding='same'))
+
+    model.add(MaxPooling2D(pool_size=(3, 3), strides=2))
+
+    model.add(BatchNormalization())
     model.add(Dropout(0.5))
 
     model.add(Flatten())
 
-    model.add(Dense(256, activation='relu'))
+    model.add(Dense(256, activation='relu', kernel_regularizer=l2(1.e-2)))
 
-    model.add(Dropout(0.5))
+    # model.add(Dropout(0.5))
 
-    model.add(Dense(20, activation='softmax'))
+    model.add(Dense(20, activation='softmax', kernel_regularizer=l2(1.e-2)))
     # decay=1e-6, lr=0.00002
-    sgd = SGD(lr=0.001, decay=1e-6, momentum=0.9, nesterov=True)
+    sgd = SGD(lr=0.01, decay=1e-4, momentum=0.9, nesterov=True)
     # 论文中写的loss和这里不一样
     # 试试categorical_crossentropy,mean_squared_error
     model.compile(loss='categorical_crossentropy',
                   optimizer=sgd, metrics=['accuracy'])
     return model
-
-
-def split_dataset(features, action_labels, subject_labels, tr_subjects, te_subjects):
-    tr_subject_ind = np.isin(subject_labels, tr_subjects)
-    te_subject_ind = np.isin(subject_labels, te_subjects)
-
-    tr_labels = action_labels[tr_subject_ind]
-    te_labels = action_labels[te_subject_ind]
-
-    tr_features = features[tr_subject_ind]
-    te_features = features[te_subject_ind]
-    return tr_features, tr_labels, te_features, te_labels
 
 
 def map_features(features, isize):
@@ -103,16 +102,13 @@ def map_features(features, isize):
 
 # 读取特征
 f = h5py.File(
-    'MSRAction3D_experiments/absolute_joint_positions/features.mat', 'r')
+    'data/MSRAction3D/features.mat', 'r')
 
 features = np.array([f[element][:] for element in f['features'][0]])
 
-# 动作的图像表示
-features = map_features(features, RESIZE_ISIZE)
-
 # 读取标签
 f = h5py.File(
-    'MSRAction3D_experiments/absolute_joint_positions/labels.mat', 'r')
+    'data/MSRAction3D/labels.mat', 'r')
 
 subject_labels = f['subject_labels'][:][0]
 action_labels = f['action_labels'][:][0]
@@ -138,29 +134,76 @@ n_tr_te_splits = 1
 
 
 for i in range(n_tr_te_splits):
-    model = build(features.shape[1:4])
+    model = build(INPUT_ISIZE)
 
     model.summary()
 
     tr_features, tr_labels, te_features, te_labels = split_dataset(
         features, action_labels, subject_labels, tr_subjects[i, :], te_subjects[i, :])
 
-    # tr_features, tr_labels = flip_img(tr_features, tr_labels)
+    tr_features, tr_labels = rand_perm_dataset(tr_features, tr_labels)
 
-    model.fit(tr_features, tr_labels,
-              batch_size=18, epochs=100, validation_data=(te_features, te_labels))
+    n_actions = np.unique(action_labels, axis=0).shape[0]
+    n_tr_samples = tr_labels.shape[0]
+    n_te_samples = te_labels.shape[0]
+    '''-----------------------原论文代码------------------------'''
+    # each group uses one original sample
+    n_group, n_samples_in_group, epochs = 7, 5, 100
+    batch_size = n_group*n_samples_in_group  # mush be times of n_samples_in_group
 
-    # model.fit(tr_features[:2], tr_labels[:2], batch_size=1, epochs=10)
+    tr_gen = tr_x_generator(tr_features, tr_labels,
+                            RESIZE_ISIZE, INPUT_ISIZE,
+                            n_actions, n_tr_samples,
+                            batch_size, n_group)
+    val_gen = val_x_generator(te_features, te_labels,
+                              RESIZE_ISIZE, INPUT_ISIZE,
+                              n_actions, n_te_samples,
+                              batch_size, n_group)
+    '''--------------------------------------------------------'''
+    # model.fit_generator(tr_gen, steps_per_epoch=n_tr_samples//n_group,
+    #                     epochs=epochs, validation_data=val_gen,
+    #                     validation_steps=300)
 
-    pr_labels = model.predict(te_features)
-    pr_labels = np.argmax(pr_labels, axis=-1) + 1
+    '''-----------------------个人复现版------------------------'''
+    n_orig_samples_per_step, steps_per_epoch = 7, 0
 
-    te_labels = np.argmax(te_labels, axis=-1) + 1
+    if n_tr_samples % n_orig_samples_per_step == 0:
+        steps_per_epoch = n_tr_samples//n_orig_samples_per_step
+    else:
+        steps_per_epoch = n_tr_samples//n_orig_samples_per_step+1
+    steps_per_epoch *= 41
 
-    total_accuracy[i] = np.sum(pr_labels == te_labels) / te_labels.size
-    print('split %d is done, accuracy:%f' %
-          (i + 1, total_accuracy[i]))
+    tr_gen = trainset_generator(tr_features, tr_labels,
+                                RESIZE_ISIZE, INPUT_ISIZE,
+                                n_actions, n_tr_samples,
+                                n_orig_samples_per_step)
 
-    # tf.reset_default_graph()
-print('all splits is done, avg accuracy:%f' %
-      (total_accuracy.mean()))
+    model.fit_generator(tr_gen, steps_per_epoch=n_tr_samples,
+                        epochs=epochs, validation_data=val_gen,
+                        validation_steps=300)
+
+    te_gen = te_generator(te_features, te_labels,
+                          RESIZE_ISIZE, INPUT_ISIZE,
+                          n_actions, n_te_samples,
+                          batch_size, n_group)
+
+    pred_list = model.predict_generator(generator=te_gen,
+                                        steps=n_te_samples)
+
+    pred_list = np.array(pred_list)
+    pred_list = np.reshape(pred_list, newshape=(
+        n_te_samples, 2*(batch_size//n_group), -1))
+
+    preds = np.argmax(pred_list, axis=2) + 1  # (number, 2*n_group)
+
+    te_labels = np.argmax(te_labels, axis=1)+1
+    print(te_labels)
+
+    # (amount_testset, 1) numpy array
+    pred_result = np.squeeze(stat.mode(preds, axis=1)[0])
+
+    print(pred_result)
+    print(np.sum(te_labels==pred_result)/te_labels.size)
+    '''--------------------------------------------------------'''
+
+ 
