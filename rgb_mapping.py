@@ -100,40 +100,10 @@ def map_features(features, isize):
     return desired_features
 
 
-# 读取特征
-f = h5py.File(
-    'data/MSRAction3D/features.mat', 'r')
+def training_pipline(features, subject_labels, action_labels, tr_subjects, te_subjects):
+    action_labels = to_categorical(action_labels - 1, 20)
+    i = 1
 
-features = np.array([f[element][:] for element in f['features'][0]])
-
-# 读取标签
-f = h5py.File(
-    'data/MSRAction3D/labels.mat', 'r')
-
-subject_labels = f['subject_labels'][:][0]
-action_labels = f['action_labels'][:][0]
-print(features.shape)
-print(subject_labels.shape)
-print(action_labels.shape)
-
-# features = mean_remove(features)
-
-# features = features.astype(np.float32) / 255
-action_labels = to_categorical(action_labels - 1, 20)
-
-# 读取数据集划分方案
-f = h5py.File(
-    'data/MSRAction3D/tr_te_splits.mat', 'r')
-
-tr_subjects = f['tr_subjects'][:].T
-te_subjects = f['te_subjects'][:].T
-n_tr_te_splits = tr_subjects.shape[0]
-
-total_accuracy = np.empty(n_tr_te_splits, dtype=np.float32)
-n_tr_te_splits = 1
-
-
-for i in range(n_tr_te_splits):
     model = build(INPUT_ISIZE)
 
     model.summary()
@@ -146,37 +116,21 @@ for i in range(n_tr_te_splits):
     n_actions = np.unique(action_labels, axis=0).shape[0]
     n_tr_samples = tr_labels.shape[0]
     n_te_samples = te_labels.shape[0]
-    '''-----------------------原论文代码------------------------'''
-    # each group uses one original sample
-    n_group, n_samples_in_group, epochs = 7, 5, 100
-    batch_size = n_group*n_samples_in_group  # mush be times of n_samples_in_group
-
-    tr_gen = tr_x_generator(tr_features, tr_labels,
-                            RESIZE_ISIZE, INPUT_ISIZE,
-                            n_actions, n_tr_samples,
-                            batch_size, n_group)
-    val_gen = val_x_generator(te_features, te_labels,
-                              RESIZE_ISIZE, INPUT_ISIZE,
-                              n_actions, n_te_samples,
-                              batch_size, n_group)
-    '''--------------------------------------------------------'''
-    # model.fit_generator(tr_gen, steps_per_epoch=n_tr_samples//n_group,
-    #                     epochs=epochs, validation_data=val_gen,
-    #                     validation_steps=300)
 
     '''-----------------------个人复现版------------------------'''
-    n_orig_samples_per_step, steps_per_epoch = 7, 0
-
-    if n_tr_samples % n_orig_samples_per_step == 0:
-        steps_per_epoch = n_tr_samples//n_orig_samples_per_step
-    else:
-        steps_per_epoch = n_tr_samples//n_orig_samples_per_step+1
-    steps_per_epoch *= 41
+    n_group, n_samples_in_group, epochs = 7, 5, 1
+    batch_size = n_group*n_samples_in_group  # mush be times of n_samples_in_group
+    n_orig_samples_per_step = 7
 
     tr_gen = trainset_generator(tr_features, tr_labels,
                                 RESIZE_ISIZE, INPUT_ISIZE,
                                 n_actions, n_tr_samples,
                                 n_orig_samples_per_step)
+
+    val_gen = val_x_generator(te_features, te_labels,
+                              RESIZE_ISIZE, INPUT_ISIZE,
+                              n_actions, n_te_samples,
+                              batch_size, n_group)
 
     model.fit_generator(tr_gen, steps_per_epoch=n_tr_samples,
                         epochs=epochs, validation_data=val_gen,
@@ -203,7 +157,79 @@ for i in range(n_tr_te_splits):
     pred_result = np.squeeze(stat.mode(preds, axis=1)[0])
 
     print(pred_result)
-    print(np.sum(te_labels==pred_result)/te_labels.size)
-    '''--------------------------------------------------------'''
+    print(np.sum(te_labels == pred_result)/te_labels.size)
 
- 
+    return model, te_features, te_labels
+
+
+def additional_tr_pipline(model, te_features, te_labels):
+    n_te_samples = te_labels.shape[0]
+    te_labels = to_categorical(te_labels - 1, 20)
+    epochs, n_orig_samples_per_step = 1, 7
+    n_actions = np.unique(action_labels, axis=0).shape[0]
+
+    tr_gen = trainset_generator(te_features, te_labels,
+                                RESIZE_ISIZE, INPUT_ISIZE,
+                                n_actions, n_te_samples,
+                                n_orig_samples_per_step)
+
+    model.fit_generator(tr_gen, steps_per_epoch=n_te_samples,
+                        epochs=epochs)
+
+    return model
+
+
+def classification_pipline(model, samples):
+    n_actions = 20
+    if np.ndim(samples) == 2:
+        samples = samples[np.newaxis, :, :]
+        labels = to_categorical(0, n_actions)
+        labels = labels[np.newaxis, :]
+        n_samples = 1
+    else:
+        n_samples = samples.shape[0]
+        labels = to_categorical(np.zeros(n_samples), n_actions)
+
+    te_gen = te_generator(samples, labels,
+                          RESIZE_ISIZE, INPUT_ISIZE,
+                          n_actions, n_samples)
+    pred_list = model.predict_generator(generator=te_gen,
+                                        steps=n_samples)
+
+    if np.ndim(pred_list)==2:
+        pred_list=pred_list[np.newaxis,:,:]
+    preds = np.argmax(pred_list, axis=2) + 1 
+    pred_result = np.squeeze(stat.mode(preds, axis=1)[0])
+
+    return pred_result
+
+if __name__ == "__main__":
+    # 读取特征
+    f = h5py.File(
+        'data/MSRAction3D/features.mat', 'r')
+
+    features = np.array([f[element][:] for element in f['features'][0]])
+
+    # 读取标签
+    f = h5py.File(
+        'data/MSRAction3D/labels.mat', 'r')
+
+    subject_labels = f['subject_labels'][:][0]
+    action_labels = f['action_labels'][:][0]
+
+    # 读取数据集划分方案
+    f = h5py.File(
+        'data/MSRAction3D/tr_te_splits.mat', 'r')
+
+    tr_subjects = f['tr_subjects'][:].T
+    te_subjects = f['te_subjects'][:].T
+    n_tr_te_splits = tr_subjects.shape[0]
+
+    model, te_features, te_labels = training_pipline(features, subject_labels,
+                                                     action_labels, tr_subjects, te_subjects)
+
+    model = additional_tr_pipline(model, te_features, te_labels)
+
+    print(classification_pipline(model, te_features[6]))
+
+    model.save('model/rgb_mapping.h5')

@@ -1,20 +1,24 @@
-from PyQt5.QtCore import Qt
 import random
 import sys
 
+import h5py
 import matplotlib
+import numpy as np
+from keras.models import load_model
 from matplotlib.backends.backend_qt5agg import \
     FigureCanvasQTAgg as FigureCanvas
 from matplotlib.figure import Figure
 from numpy import arange, pi, sin
 from PyQt5 import QtCore
+from PyQt5.QtCore import (QAbstractListModel, QModelIndex, QSize,
+                          QStringListModel, Qt)
 from PyQt5.QtGui import QIcon
-from PyQt5.QtWidgets import (QListView, QAction, QApplication, QMainWindow, QMenu,
-                             QMessageBox, QFileDialog, QSizePolicy, QHBoxLayout, QWidget)
-from PyQt5.QtCore import QStringListModel, QAbstractListModel, QModelIndex, QSize
-import h5py
-import numpy as np
+from PyQt5.QtWidgets import (QAction, QApplication, QFileDialog, QGridLayout,
+                             QHBoxLayout, QListView, QMainWindow, QMenu,
+                             QMessageBox, QSizePolicy, QWidget, QLabel)
 
+from rgb_mapping import classification_pipline
+import os
 matplotlib.use("Qt5Agg")
 
 
@@ -75,56 +79,78 @@ class ApplicationWindow(QMainWindow):
         self.setWindowTitle("skeleton display")
 
         # top-level menu
-        self.file_menu = QMenu('&File', self)
-        self.help_menu = QMenu('&Help', self)
+        file_menu = QMenu('&File', self)
+        help_menu = QMenu('&Help', self)
 
         # list view
-        listModel = QStringListModel()
-        # listModel.setStringList(['items'])
-        listView = QListView()
-        listView.setModel(listModel)
+        listModel_1 = QStringListModel()  # models list
+        listModel_2 = QStringListModel()  # features list
+        listView_1 = QListView()
+        listView_1.setModel(listModel_1)
+        listView_2 = QListView()
+        listView_2.setModel(listModel_2)
 
         # menu action
-        self.file_menu.addAction(
-            '&Import Features', lambda: self.importFeatures(listModel), QtCore.Qt.CTRL + QtCore.Qt.Key_F)
-        self.file_menu.addAction(
-            '&Import Labels', lambda: self.importLabels(listModel), QtCore.Qt.CTRL + QtCore.Qt.Key_L)
-        self.file_menu.addAction(
-            '&Import Models', lambda: self.importModels(listModel), QtCore.Qt.CTRL + QtCore.Qt.Key_M)
-        self.file_menu.addAction('&Quit', self.quit,
-                                 QtCore.Qt.CTRL + QtCore.Qt.Key_Q)
-        self.help_menu.addAction('&About', self.about)
+        file_menu.addAction(
+            '&Import Features', lambda: self.importFeatures(listModel_2), QtCore.Qt.CTRL + QtCore.Qt.Key_F)
+        file_menu.addAction(
+            '&Import Labels', lambda: self.importLabels(listModel_2), QtCore.Qt.CTRL + QtCore.Qt.Key_L)
+        file_menu.addAction(
+            '&Import Models', lambda: self.importModels(listModel_1), QtCore.Qt.CTRL + QtCore.Qt.Key_M)
+        file_menu.addAction('&Quit', self.quit,
+                            QtCore.Qt.CTRL + QtCore.Qt.Key_Q)
+        help_menu.addAction('&About', self.about)
 
         # add menu
-        self.menuBar().addMenu(self.file_menu)
+        self.menuBar().addMenu(file_menu)
         self.menuBar().addSeparator()
-        self.menuBar().addMenu(self.help_menu)
+        self.menuBar().addMenu(help_menu)
+
+        # add labels
+        label_1 = QLabel(self)
+        label_1.setText("Samples")
+        label_1.setAutoFillBackground(True)
+        label_1.setAlignment(Qt.AlignLeft)
+        label_2 = QLabel(self)
+        label_2.setText("Models")
+        label_2.setAutoFillBackground(True)
+        label_2.setAlignment(Qt.AlignLeft)
+        label_3 = QLabel(self)
+        label_3.setText("Frames")
+        label_3.setAutoFillBackground(True)
+        label_3.setAlignment(Qt.AlignLeft)
 
         # window
         self.main_widget = QWidget(self)
 
-        # layout = QVBoxLayout(self.main_widget)
-        layout = QHBoxLayout(self.main_widget)
-        layout.setDirection(QHBoxLayout.LeftToRight)
-        layout.addWidget(listView, 0, Qt.AlignLeft)
+        layout = QGridLayout(self.main_widget)
+        layout.addWidget(label_2, 0, 0)
+        layout.addWidget(listView_1, 1, 0)
+        layout.addWidget(label_1, 0, 1)
+        layout.addWidget(listView_2, 1, 1)
+        layout.addWidget(label_3, 0, 2)
         layout.addWidget(MyDynamicMplCanvas(
-            self.main_widget, width=5, height=4, dpi=100), 0, Qt.AlignRight)
+            self.main_widget, width=5, height=4, dpi=100), 1, 2)
 
         self.main_widget.setFocus()
         self.setCentralWidget(self.main_widget)
-        # 状态条显示2秒
-        self.statusBar().showMessage("skeleton display program", 2000)
+        self.statusBar().showMessage("skeleton display program")
+
+        self.init_variables()
+
+    def init_variables(self):
+        self.models = dict()
 
     def importFeatures(self, listModel):
         fname = QFileDialog.getOpenFileName(self, 'open feature file', '/')
         if fname[0] is not None:
             f = h5py.File(fname[0], 'r')
-            features = np.array([f[element]
-                                 for element in np.squeeze(f['features'][:])])
-            n_features = features.shape[0]
+            self.features = np.array([f[element]
+                                      for element in np.squeeze(f['features'][:])])
+            n_features = self.features.shape[0]
             idx = np.arange(n_features).astype(str)
             listModel.setStringList(idx)
-            
+
     def importLabels(self, listModel):
         fname = QFileDialog.getOpenFileName(self, 'open label file', '/')
         if fname[0] is not None:
@@ -136,14 +162,17 @@ class ApplicationWindow(QMainWindow):
             listModel.setStringList(idx)
 
     def importModels(self, listModel):
-        fname = QFileDialog.getOpenFileName(self, 'open model file', '/')
-        if fname[0] is not None:
-            f = h5py.File(fname[0], 'r')
-            features = np.array([f[element]
-                                 for element in np.squeeze(f['features'][:])])
-            n_features = features.shape[0]
-            idx = np.arange(n_features).astype(str)
-            listModel.setStringList(idx)
+        fpath = QFileDialog.getOpenFileName(self, 'open model file', '/')
+        for fp in fpath[:-1]:
+            if fp is not None:
+                model = load_model(fp)
+                mname = os.path.splitext(os.path.basename(fp))[0]
+                self.models[mname] = model
+
+                n_rows = listModel.rowCount()
+                if listModel.insertRow(n_rows):
+                    i = listModel.index(n_rows)
+                    listModel.setData(i, mname)
 
     def quit(self):
         self.close()
