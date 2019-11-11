@@ -7,11 +7,10 @@ def map_img(mat, resize_isize):
     :param mat: (n_frames, feat_dim)
     :return: (60, 60, 3)
     '''
-    mat = np.reshape(mat, newshape=(-1, 19, 3))
+    mat = np.reshape(mat, newshape=(-1, 20, 3))
     mat = np.swapaxes(mat, 0, 1)  # mat: (n_feat, n_frames, n_dim)
 
     n_frames = mat.shape[1]
-    mat = np.insert(mat, 6, np.zeros((n_frames, 3)), axis=0)
     # part_config = [25, 12, 24, 11, 10, 9, 21, 21, 5, 6, 7, 8, 22, 23,
     #                21, 3, 4, 21, 2, 1, 17, 18, 19, 20, 21, 2, 1, 13, 14, 15, 16]
     part_config = np.array([12, 10, 8, 1, 1, 3, 2, 2, 9, 11, 13, 20, 3, 4, 7, 7,

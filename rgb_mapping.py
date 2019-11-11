@@ -118,7 +118,7 @@ def training_pipline(features, subject_labels, action_labels, tr_subjects, te_su
     n_te_samples = te_labels.shape[0]
 
     '''-----------------------个人复现版------------------------'''
-    n_group, n_samples_in_group, epochs = 7, 5, 1
+    n_group, n_samples_in_group, epochs = 7, 5, 100
     batch_size = n_group*n_samples_in_group  # mush be times of n_samples_in_group
     n_orig_samples_per_step = 7
 
@@ -208,14 +208,15 @@ if __name__ == "__main__":
     f = h5py.File(
         'data/MSRAction3D/features.mat', 'r')
 
-    features = np.array([f[element][:] for element in f['features'][0]])
+    features = np.array([f[element]
+                        for element in np.squeeze(f['features'][:])])
 
     # 读取标签
     f = h5py.File(
         'data/MSRAction3D/labels.mat', 'r')
 
-    subject_labels = f['subject_labels'][:][0]
-    action_labels = f['action_labels'][:][0]
+    subject_labels = f['subject_labels'][:, 0]
+    action_labels = f['action_labels'][:, 0]
 
     # 读取数据集划分方案
     f = h5py.File(
