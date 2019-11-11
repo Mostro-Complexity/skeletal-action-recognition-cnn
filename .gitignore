@@ -1,0 +1,5 @@
+data/Berkeley MHAD
+data/CAD-60
+*.mat
+data/MSRAction3D/MSRAction3DSkeletonReal3D
+*.pyc

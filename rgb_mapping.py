@@ -8,6 +8,7 @@ import h5py
 import keras
 import numpy as np
 import scipy.stats as stat
+import json
 import tensorflow as tf
 from keras.initializers import TruncatedNormal, Zeros
 from keras.layers import Conv2D, Dense, Dropout, Flatten, MaxPooling2D
@@ -219,11 +220,11 @@ if __name__ == "__main__":
     action_labels = f['action_labels'][:, 0]
 
     # 读取数据集划分方案
-    f = h5py.File(
-        'data/MSRAction3D/tr_te_splits.mat', 'r')
+    f = json.load(open(
+        'data/MSRAction3D/tr_te_splits.json', 'r'))
 
-    tr_subjects = f['tr_subjects'][:].T
-    te_subjects = f['te_subjects'][:].T
+    tr_subjects = np.array(f['tr_subjects'])
+    te_subjects = np.array(f['te_subjects'])
     n_tr_te_splits = tr_subjects.shape[0]
 
     model, te_features, te_labels = training_pipline(features, subject_labels,
