@@ -31,11 +31,36 @@ RESIZE_ISIZE = (60, 60, 3)
 INPUT_ISIZE = (52, 52, 3)
 
 
-def build(input_shape):
+def build_feat_extraction_module(input_shape):
+    input_layer = Input(shape=input_shape)
+
+    time_diff = input_layer[:, :, 1:]-input_layer[:, :, :-1]
+    time_diff = image.resize(
+        time_diff, list(input_shape[:-1]),
+        method=image.ResizeMethod.NEAREST_NEIGHBOR)
+
+    start_time = input_layer[:, :, 0]
+    start_time = tf.tile(start_time[:, :, tf.newaxis],
+                         [1, 1, input_shape[0]-1, 1])
+    start_time_diff = input_layer[:, :, 1:]-start_time
+    start_time_diff = image.resize(
+        time_diff, list(input_shape[:-1]),
+        method=image.ResizeMethod.NEAREST_NEIGHBOR)
+
+    shared_layer = concatenate([
+        input_layer, time_diff, start_time_diff], axis=-1)
+    features_module = Model(input_layer, shared_layer)
+
+    features_module.summary()
+    return features_module
+
+
+def build_classify_module(input_shape):
     model = Sequential()
 
-    model.add(Conv2D(32, (3, 3), activation='relu', input_shape=input_shape,
-                     strides=1, padding='same'))
+    model.add(build_feat_extraction_module(input_shape))
+
+    model.add(Conv2D(32, (3, 3), activation='relu', strides=1, padding='same'))
 
     model.add(MaxPooling2D(pool_size=(3, 3), strides=2))
 
@@ -105,7 +130,7 @@ def training_pipline(features, subject_labels, action_labels, tr_subjects, te_su
     action_labels = to_categorical(action_labels - 1, 20)
     i = 1
 
-    model = build(INPUT_ISIZE)
+    model = build_classify_module(INPUT_ISIZE)
 
     model.summary()
 
@@ -235,4 +260,4 @@ if __name__ == "__main__":
 
     print(classification_pipline(model, te_features[6]))
 
-    model.save('model/rgb_mapping.h5')
+    model.save('model/multiple_mapping.h5')

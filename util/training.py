@@ -1,5 +1,5 @@
 import numpy as np
-from keras.utils import to_categorical
+from tensorflow.keras.utils import to_categorical
 
 from .preprocessing import (corner_select_patch,
                             flip_img_horizontal,
