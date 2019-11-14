@@ -5,7 +5,6 @@ acc稳定在0.7到0.8之间
 """
 import cv2
 import h5py
-import keras
 import numpy as np
 import scipy.stats as stat
 import json
@@ -24,8 +23,8 @@ from sklearn.preprocessing import MinMaxScaler, StandardScaler
 from util.dataset_processing import rand_perm_dataset, split_dataset
 from util.preprocessing import (flip_img_horizontal, random_select_patch,
                                 standardize_img)
-from util.training import (te_generator, tr_x_generator, trainset_generator,
-                           val_x_generator)
+from util.training import (te_batch_generator, tr_x_generator, tr_batch_generator,
+                           val_batch_generator)
 
 RESIZE_ISIZE = (60, 60, 3)
 INPUT_ISIZE = (52, 52, 3)
@@ -44,7 +43,7 @@ def build_feat_extraction_module(input_shape):
                          [1, 1, input_shape[0]-1, 1])
     start_time_diff = input_layer[:, :, 1:]-start_time
     start_time_diff = image.resize(
-        time_diff, list(input_shape[:-1]),
+        start_time_diff, list(input_shape[:-1]),
         method=image.ResizeMethod.NEAREST_NEIGHBOR)
 
     shared_layer = concatenate([
@@ -96,36 +95,6 @@ def build_classify_module(input_shape):
     return model
 
 
-def map_features(features, isize):
-    """
-    """
-    n_samples, n_frames, n_feat = features.shape
-
-    features = np.reshape(features, (-1, n_frames, n_feat//3, 3))
-    features = np.swapaxes(features, 1, 2)
-    # 插入hip_center
-    features = np.insert(features, obj=6, values=np.zeros(
-        (n_samples, n_frames, 3)), axis=1)
-    n_feat += 3
-
-    # 归一化
-    for i in range(n_samples):
-        features[i] = standardize_img(features[i])
-    features = np.uint8(features)
-
-    # 调整空间结构
-    part_config = np.array([12, 10, 8, 1, 1, 3, 2, 2, 9, 11, 13, 20, 3, 4, 7, 7,
-                            5, 6, 5, 14, 16, 18, 6, 15, 17, 19])
-    features = features[:, part_config-1]
-
-    desired_features = np.empty((n_samples, isize[0], isize[0], 3), np.float32)
-    for i in range(n_samples):  # resize加缩小数值
-        desired_features[i] = transform.resize(features[i], isize)
-        # TODO:换掉这个函数
-
-    return desired_features
-
-
 def training_pipline(features, subject_labels, action_labels, tr_subjects, te_subjects):
     action_labels = to_categorical(action_labels - 1, 20)
     i = 1
@@ -144,35 +113,36 @@ def training_pipline(features, subject_labels, action_labels, tr_subjects, te_su
     n_te_samples = te_labels.shape[0]
 
     '''-----------------------个人复现版------------------------'''
-    n_group, n_samples_in_group, epochs = 7, 5, 100
-    batch_size = n_group*n_samples_in_group  # mush be times of n_samples_in_group
-    n_orig_samples_per_step = 7
+    epochs = 1
+    # 7 orig samples is used and each orig sample gen 5 patches
+    n_orig_samples_per_step, n_patches = 7, 5
+    batch_size = n_orig_samples_per_step * n_patches
 
-    tr_gen = trainset_generator(tr_features, tr_labels,
+    tr_gen = tr_batch_generator(tr_features, tr_labels,
                                 RESIZE_ISIZE, INPUT_ISIZE,
                                 n_actions, n_tr_samples,
                                 n_orig_samples_per_step)
 
-    val_gen = val_x_generator(te_features, te_labels,
-                              RESIZE_ISIZE, INPUT_ISIZE,
-                              n_actions, n_te_samples,
-                              batch_size, n_group)
+    val_gen = val_batch_generator(te_features, te_labels,
+                                  RESIZE_ISIZE, INPUT_ISIZE,
+                                  n_actions, n_te_samples,
+                                  n_orig_samples_per_step)
 
     model.fit_generator(tr_gen, steps_per_epoch=n_tr_samples,
                         epochs=epochs, validation_data=val_gen,
                         validation_steps=300)
 
-    te_gen = te_generator(te_features, te_labels,
-                          RESIZE_ISIZE, INPUT_ISIZE,
-                          n_actions, n_te_samples,
-                          batch_size, n_group)
+    te_gen = te_batch_generator(te_features, te_labels,
+                                RESIZE_ISIZE, INPUT_ISIZE,
+                                n_actions, n_te_samples,
+                                n_orig_samples_per_step)
 
     pred_list = model.predict_generator(generator=te_gen,
                                         steps=n_te_samples)
 
     pred_list = np.array(pred_list)
     pred_list = np.reshape(pred_list, newshape=(
-        n_te_samples, 2*(batch_size//n_group), -1))
+        n_te_samples, 2*(n_patches), -1))
 
     preds = np.argmax(pred_list, axis=2) + 1  # (number, 2*n_group)
 
@@ -194,7 +164,7 @@ def additional_tr_pipline(model, te_features, te_labels):
     epochs, n_orig_samples_per_step = 1, 7
     n_actions = np.unique(action_labels, axis=0).shape[0]
 
-    tr_gen = trainset_generator(te_features, te_labels,
+    tr_gen = tr_batch_generator(te_features, te_labels,
                                 RESIZE_ISIZE, INPUT_ISIZE,
                                 n_actions, n_te_samples,
                                 n_orig_samples_per_step)
@@ -216,9 +186,11 @@ def classification_pipline(model, samples):
         n_samples = samples.shape[0]
         labels = to_categorical(np.zeros(n_samples), n_actions)
 
-    te_gen = te_generator(samples, labels,
-                          RESIZE_ISIZE, INPUT_ISIZE,
-                          n_actions, n_samples)
+    n_orig_samples_per_step = 7
+    te_gen = te_batch_generator(samples, labels,
+                                RESIZE_ISIZE, INPUT_ISIZE,
+                                n_actions, n_samples,
+                                n_orig_samples_per_step)
     pred_list = model.predict_generator(generator=te_gen,
                                         steps=n_samples)
 

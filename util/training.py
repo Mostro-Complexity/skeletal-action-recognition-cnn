@@ -17,11 +17,14 @@ def __init_samples_ret__(input_isize, n_actions):
     return ret_x, ret_y
 
 
-def trainset_generator(tr_features, tr_labels,
+def tr_batch_generator(tr_features, tr_labels,
                        resize_isize, input_isize,
                        n_actions, n_tr_samples,
                        n_orig_samples_per_step, n_patches=5):
-
+    '''feature generator designed by me.
+    :n_orig_samples_per_step: how many samples in raw data is used for each iteration
+    :n_patches: how many patches is genarated by each original sample
+    '''
     while True:
         ret_x, ret_y = __init_samples_ret__(input_isize, n_actions)
         for s in range(n_tr_samples):
@@ -51,6 +54,9 @@ def tr_x_generator(tr_features, tr_labels,
                    resize_isize, input_isize,
                    n_actions, n_tr_samples,
                    batch_size=35, n_group=7):
+    '''reference program code, some samples cannot be used. [deprecated]
+    '''
+
     anchor = 0
     while True:
         ret_x = np.empty(
@@ -79,20 +85,21 @@ def tr_x_generator(tr_features, tr_labels,
         yield (ret_x, ret_y)
 
 
-def val_x_generator(te_features, te_labels,
-                    resize_isize, input_isize, n_actions,
-                    n_te_samples, batch_size=35, n_group=7):
+def val_batch_generator(te_features, te_labels,
+                        resize_isize, input_isize,
+                        n_actions, n_te_samples,
+                        n_orig_samples_per_step, n_patches=5):
     '''
     here we trick and use test set as validation set since the train set is too small in cross-view exp
     :return:
     '''
     validate_max_size = n_te_samples
-    n_samples_in_group = batch_size//n_group
+    batch_size = n_patches * n_orig_samples_per_step
     while True:
-        ret_x = np.zeros(shape=(2*n_samples_in_group, input_isize[0],
+        ret_x = np.zeros(shape=(2*n_patches, input_isize[0],
                                 input_isize[1], 3), dtype=np.float32)
         ret_y = np.zeros(
-            shape=(2*n_samples_in_group, n_actions), dtype=np.float32)
+            shape=(2*n_patches, n_actions), dtype=np.float32)
 
         # random_select = random.sample(range(validate_max_size), 1)[0]
         random_select = np.random.randint(validate_max_size)
@@ -105,32 +112,32 @@ def val_x_generator(te_features, te_labels,
             flip_img_horizontal(rgb_img, flip_prob=1.00),
             input_isize)
 
-        ret_x[0:n_samples_in_group] = clips
-        ret_x[n_samples_in_group:] = flip_clips
+        ret_x[0:n_patches] = clips
+        ret_x[n_patches:] = flip_clips
         label = te_labels[random_select]
         label = label[np.newaxis, :]
-        labels = np.tile(label, reps=[2*n_samples_in_group, 1])
+        labels = np.tile(label, reps=[2*n_patches, 1])
         ret_y = labels
 
         yield (ret_x, ret_y)
 
 
-def te_generator(te_features, te_labels,
-                 resize_isize, input_isize,
-                 n_actions, n_te_samples,
-                 batch_size=35, n_group=7):
+def te_batch_generator(te_features, te_labels,
+                       resize_isize, input_isize,
+                       n_actions, n_te_samples,
+                       n_orig_samples_per_step, n_patches=5):
     '''
     select five patches from the four corner and center and their horizontal flip to evaluate. Using the voting result
     as the final result
     :return: (ret_x, ret_y) with the shape ret_x ~ (10, weight, height, 3), (10, num_actions)
     '''
     anchor = 0
-    n_samples_in_group = batch_size//n_group
+    batch_size = n_orig_samples_per_step*n_patches
     while True:
-        ret_x = np.zeros(shape=(2*n_samples_in_group, input_isize[0],
+        ret_x = np.zeros(shape=(2*n_patches, input_isize[0],
                                 input_isize[1], 3), dtype=np.float32)
         ret_y = np.zeros(
-            shape=(2*n_samples_in_group, n_actions), dtype=np.float32)
+            shape=(2*n_patches, n_actions), dtype=np.float32)
         if anchor > n_te_samples-1:
             print('Test traversal has been done !')
             break
@@ -142,11 +149,11 @@ def te_generator(te_features, te_labels,
             flip_img_horizontal(rgb_img, flip_prob=1.00), input_isize)
         # flip_clips = clips
 
-        ret_x[0:n_samples_in_group] = clips
-        ret_x[n_samples_in_group:] = flip_clips
+        ret_x[0:n_patches] = clips
+        ret_x[n_patches:] = flip_clips
         label = te_labels[anchor]
         label = label[np.newaxis, :]
-        labels = np.tile(label, reps=[2*n_samples_in_group, 1])
+        labels = np.tile(label, reps=[2*n_patches, 1])
         ret_y[:] = labels
         anchor += 1
         # print(anchor)

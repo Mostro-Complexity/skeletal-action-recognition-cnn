@@ -19,7 +19,7 @@ from sklearn.preprocessing import MinMaxScaler, StandardScaler
 
 from util.preprocessing import (flip_img_horizontal, random_select_patch,
                                 standardize_img)
-from util.training import tr_x_generator, val_x_generator
+from util.training import tr_x_generator, val_batch_generator
 RESIZE_ISIZE = (60, 60, 3)
 INPUT_ISIZE = (52, 52, 3)
 
@@ -153,7 +153,7 @@ for i in range(n_tr_te_splits):
                             RESIZE_ISIZE, INPUT_ISIZE,
                             n_action, n_tr_samples,
                             batch_size, n_group)
-    val_gen = val_x_generator(te_features, te_labels,
+    val_gen = val_batch_generator(te_features, te_labels,
                               RESIZE_ISIZE, INPUT_ISIZE,
                               n_action, n_te_samples,
                               batch_size, n_group)
