@@ -1,7 +1,5 @@
 """
-这个程序直接将不同关节的三位坐标作为图像的RGB分量做2维卷积
-将前后帧之差（time_diff）放入feature map中
-acc稳定0.8
+acc:0.85
 
 """
 import cv2
@@ -31,63 +29,76 @@ RESIZE_ISIZE = (60, 60, 3)
 INPUT_ISIZE = (52, 52, 3)
 
 
-def build_feat_extraction_module(input_shape):
-    input_layer = Input(shape=input_shape)
-
+def build_time_diff_module(input_layer, output_shape):
     time_diff = input_layer[:, :, 1:]-input_layer[:, :, :-1]
     time_diff = image.resize(
-        time_diff, list(input_shape[:-1]),
+        time_diff, list(output_shape[:-1]),
+        method=image.ResizeMethod.NEAREST_NEIGHBOR)
+    return time_diff
+
+
+def build_start_time_diff_module(input_layer, output_shape):
+    start_time = input_layer[:, :, 0]
+    start_time = tf.tile(start_time[:, :, tf.newaxis],
+                         [1, 1, output_shape[0]-1, 1])
+    start_time_diff = input_layer[:, :, 1:]-start_time
+    start_time_diff = image.resize(
+        start_time_diff, list(output_shape[:-1]),
         method=image.ResizeMethod.NEAREST_NEIGHBOR)
 
-    shared_layer = concatenate([
-        input_layer, time_diff], axis=-1)
+    return start_time_diff
 
-    # start_time = input_layer[:, :, 0]
-    # start_time = tf.tile(start_time[:, :, tf.newaxis],
-    #                      [1, 1, input_shape[0]-1, 1])
 
-    # start_time_diff = input_layer[:, :, 1:]-start_time
-    # start_time_diff = image.resize(
-    #     time_diff, list(input_shape[:-1]),
-    #     method=image.ResizeMethod.NEAREST_NEIGHBOR)
+def build_conv_module(input_layer):
+    conv_1 = Conv2D(32, (3, 3), activation='relu',
+                    strides=1, padding='same')(input_layer)
 
-    # shared_layer = concatenate([
-    #     input_layer, time_diff, start_time_diff], axis=-1)
+    pooling_1 = MaxPooling2D(pool_size=(3, 3), strides=2)(conv_1)
 
-    features_module = Model(input_layer, shared_layer)
+    conv_2 = Conv2D(32, (3, 3), activation='relu',
+                    strides=1, padding='same')(pooling_1)
+
+    pooling_2 = MaxPooling2D(pool_size=(3, 3), strides=2)(conv_2)
+
+    bn_1 = BatchNormalization()(pooling_2)
+    dropout_1 = Dropout(0.5)(bn_1)
+
+    conv_3 = Conv2D(64, (3, 3), activation='relu',
+                    strides=1, padding='same')(dropout_1)
+
+    pooling_3 = MaxPooling2D(pool_size=(3, 3), strides=2)(conv_3)
+
+    conv_4 = Conv2D(64, (3, 3), activation='relu',
+                    strides=1, padding='same')(pooling_3)
+
+    pooling_4 = MaxPooling2D(pool_size=(3, 3), strides=2)(conv_4)
+
+    bn_2 = BatchNormalization()(pooling_4)
+    dropout_2 = Dropout(0.5)(bn_2)
+
+    flatten = Flatten()(dropout_2)
+
+    return flatten
+
+
+def build(input_shape):
+    input_layer = Input(shape=input_shape)
+    time_diff = build_time_diff_module(input_layer, input_shape)
+    start_time_diff = build_start_time_diff_module(input_layer, input_shape)
+
+    raw_data_conv = build_conv_module(input_layer)
+    time_diff_conv = build_conv_module(time_diff)
+    start_time_diff_conv = build_conv_module(start_time_diff)
+
+    concat_layer = concatenate([
+        raw_data_conv, time_diff_conv, start_time_diff_conv], axis=-1)
+    features_module = Model(input_layer, concat_layer)
 
     features_module.summary()
-    return features_module
 
-
-def build_classify_module(input_shape):
     model = Sequential()
 
-    model.add(build_feat_extraction_module(input_shape))
-
-    model.add(Conv2D(32, (3, 3), activation='relu', strides=1, padding='same'))
-
-    model.add(MaxPooling2D(pool_size=(3, 3), strides=2))
-
-    model.add(Conv2D(32, (3, 3), activation='relu', strides=1, padding='same'))
-
-    model.add(MaxPooling2D(pool_size=(3, 3), strides=2))
-
-    model.add(BatchNormalization())
-    model.add(Dropout(0.5))
-
-    model.add(Conv2D(64, (3, 3), activation='relu', strides=1, padding='same'))
-
-    model.add(MaxPooling2D(pool_size=(3, 3), strides=2))
-
-    model.add(Conv2D(64, (3, 3), activation='relu', strides=1, padding='same'))
-
-    model.add(MaxPooling2D(pool_size=(3, 3), strides=2))
-
-    model.add(BatchNormalization())
-    model.add(Dropout(0.5))
-
-    model.add(Flatten())
+    model.add(features_module)
 
     model.add(Dense(256, activation='relu', kernel_regularizer=l2(1.e-2)))
 
@@ -98,6 +109,7 @@ def build_classify_module(input_shape):
     # 试试categorical_crossentropy,mean_squared_error
     model.compile(loss='categorical_crossentropy',
                   optimizer=sgd, metrics=['accuracy'])
+
     return model
 
 
@@ -105,7 +117,7 @@ def training_pipline(features, subject_labels, action_labels, tr_subjects, te_su
     action_labels = to_categorical(action_labels - 1, 20)
     i = 1
 
-    model = build_classify_module(INPUT_ISIZE)
+    model = build(INPUT_ISIZE)
 
     model.summary()
 
@@ -238,4 +250,4 @@ if __name__ == "__main__":
 
     print(classification_pipline(model, te_features[6]))
 
-    model.save('model/multiple_mapping.h5')
+    model.save('model/feature_investigating.h5')
