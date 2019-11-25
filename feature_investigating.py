@@ -1,108 +1,63 @@
 """
 acc:0.85
-
+过去骨架数据到图像的映射采用训练前的预处理策略
+此处将骨架到图像的映射转移到网络内部
 """
+import json
+
 import cv2
 import h5py
 import numpy as np
 import scipy.stats as stat
-import json
 import tensorflow as tf
-from tensorflow.keras.initializers import TruncatedNormal, Zeros
-from tensorflow.keras.layers import Conv2D, Dense, Dropout, Flatten, MaxPooling2D, Input, concatenate
-from tensorflow.keras.layers import BatchNormalization
-from tensorflow.keras.models import Sequential, Model
-from tensorflow.keras.optimizers import SGD
-from tensorflow.keras.regularizers import l1, l2
-from tensorflow import image
-from tensorflow.keras.utils import plot_model, to_categorical
 from skimage import transform
 from sklearn.preprocessing import MinMaxScaler, StandardScaler
+from tensorflow import image
+from tensorflow.keras.layers import (BatchNormalization, Conv2D, Dense,
+                                     Dropout, Flatten, Input, MaxPooling2D,
+                                     concatenate)
+from tensorflow.keras.models import Model, Sequential
+from tensorflow.keras.optimizers import SGD
+from tensorflow.keras.regularizers import l1, l2
+from tensorflow.keras.utils import plot_model, to_categorical
 
 from util.dataset_processing import rand_perm_dataset, split_dataset
+from util.modeling import (build_conv_module, build_start_time_diff_module,
+                           build_time_diff_module)
 from util.preprocessing import (flip_img_horizontal, random_select_patch,
                                 standardize_img)
-from util.training import (te_batch_generator, tr_x_generator, tr_batch_generator,
-                           val_batch_generator)
+from util.training import (te_batch_migenerator, tr_batch_migenerator,
+                           val_batch_migenerator, empty_batch_migenerator)
 
-RESIZE_ISIZE = (60, 60, 3)
-INPUT_ISIZE = (52, 52, 3)
-
-
-def build_time_diff_module(input_layer, output_shape):
-    time_diff = input_layer[:, :, 1:]-input_layer[:, :, :-1]
-    time_diff = image.resize(
-        time_diff, list(output_shape[:-1]),
-        method=image.ResizeMethod.NEAREST_NEIGHBOR)
-    return time_diff
-
-
-def build_start_time_diff_module(input_layer, output_shape):
-    start_time = input_layer[:, :, 0]
-    start_time = tf.tile(start_time[:, :, tf.newaxis],
-                         [1, 1, output_shape[0]-1, 1])
-    start_time_diff = input_layer[:, :, 1:]-start_time
-    start_time_diff = image.resize(
-        start_time_diff, list(output_shape[:-1]),
-        method=image.ResizeMethod.NEAREST_NEIGHBOR)
-
-    return start_time_diff
-
-
-def build_conv_module(input_layer):
-    conv_1 = Conv2D(32, (3, 3), activation='relu',
-                    strides=1, padding='same')(input_layer)
-
-    pooling_1 = MaxPooling2D(pool_size=(3, 3), strides=2)(conv_1)
-
-    conv_2 = Conv2D(32, (3, 3), activation='relu',
-                    strides=1, padding='same')(pooling_1)
-
-    pooling_2 = MaxPooling2D(pool_size=(3, 3), strides=2)(conv_2)
-
-    bn_1 = BatchNormalization()(pooling_2)
-    dropout_1 = Dropout(0.5)(bn_1)
-
-    conv_3 = Conv2D(64, (3, 3), activation='relu',
-                    strides=1, padding='same')(dropout_1)
-
-    pooling_3 = MaxPooling2D(pool_size=(3, 3), strides=2)(conv_3)
-
-    conv_4 = Conv2D(64, (3, 3), activation='relu',
-                    strides=1, padding='same')(pooling_3)
-
-    pooling_4 = MaxPooling2D(pool_size=(3, 3), strides=2)(conv_4)
-
-    bn_2 = BatchNormalization()(pooling_4)
-    dropout_2 = Dropout(0.5)(bn_2)
-
-    flatten = Flatten()(dropout_2)
-
-    return flatten
+RESIZE_ISIZE = [(60, 60, 3), (128, 76, 3), (128, 76, 1)]
+INPUT_ISIZE = [(52, 52, 3), (120, 70, 3), (120, 70, 1)]
 
 
 def build(input_shape):
-    input_layer = Input(shape=input_shape)
-    time_diff = build_time_diff_module(input_layer, input_shape)
-    start_time_diff = build_start_time_diff_module(input_layer, input_shape)
+    input_1 = Input(shape=input_shape[0])
+    time_diff = build_time_diff_module(input_1, input_shape[0])
+    start_time_diff = build_start_time_diff_module(input_1, input_shape[0])
 
-    raw_data_conv = build_conv_module(input_layer)
+    raw_data_conv = build_conv_module(input_1)
     time_diff_conv = build_conv_module(time_diff)
     start_time_diff_conv = build_conv_module(start_time_diff)
 
+    input_2 = Input(shape=input_shape[1])
+    input_3 = Input(shape=input_shape[2])
+    ll_angle_conv = build_conv_module(input_2)
+    lp_angle_conv = build_conv_module(input_3)
+
     concat_layer = concatenate([
-        raw_data_conv, time_diff_conv, start_time_diff_conv], axis=-1)
-    features_module = Model(input_layer, concat_layer)
+        raw_data_conv, time_diff_conv, start_time_diff_conv,
+        ll_angle_conv, lp_angle_conv], axis=-1)
 
-    features_module.summary()
+    fc_1 = Dense(256, activation='relu',
+                 kernel_regularizer=l2(1.e-2))(concat_layer)
 
-    model = Sequential()
+    output = Dense(20, activation='softmax',
+                   kernel_regularizer=l2(1.e-2))(fc_1)
 
-    model.add(features_module)
-
-    model.add(Dense(256, activation='relu', kernel_regularizer=l2(1.e-2)))
-
-    model.add(Dense(20, activation='softmax', kernel_regularizer=l2(1.e-2)))
+    model = Model([input_1, input_2, input_3], output)
     # decay=1e-6, lr=0.00002
     sgd = SGD(lr=0.01, decay=1e-4, momentum=0.9, nesterov=True)
     # 论文中写的loss和这里不一样
@@ -131,26 +86,26 @@ def training_pipline(features, subject_labels, action_labels, tr_subjects, te_su
     n_te_samples = te_labels.shape[0]
 
     '''-----------------------个人复现版------------------------'''
-    epochs = 1
+    epochs = 100
     # 7 orig samples is used and each orig sample gen 5 patches
     n_orig_samples_per_step, n_patches = 7, 5
     batch_size = n_orig_samples_per_step * n_patches
 
-    tr_gen = tr_batch_generator(tr_features, tr_labels,
-                                RESIZE_ISIZE, INPUT_ISIZE,
-                                n_actions, n_tr_samples,
-                                n_orig_samples_per_step)
-
-    val_gen = val_batch_generator(te_features, te_labels,
+    tr_gen = tr_batch_migenerator(tr_features, tr_labels,
                                   RESIZE_ISIZE, INPUT_ISIZE,
-                                  n_actions, n_te_samples,
+                                  n_actions, n_tr_samples,
                                   n_orig_samples_per_step)
+
+    val_gen = val_batch_migenerator(te_features, te_labels,
+                                    RESIZE_ISIZE, INPUT_ISIZE,
+                                    n_actions, n_te_samples,
+                                    n_orig_samples_per_step)
 
     model.fit_generator(tr_gen, steps_per_epoch=n_tr_samples,
                         epochs=epochs, validation_data=val_gen,
                         validation_steps=300)
 
-    te_gen = te_batch_generator(te_features, te_labels,
+    te_gen = te_batch_migenerator(te_features, te_labels,
                                 RESIZE_ISIZE, INPUT_ISIZE,
                                 n_actions, n_te_samples,
                                 n_orig_samples_per_step)
@@ -182,10 +137,10 @@ def additional_tr_pipline(model, te_features, te_labels):
     epochs, n_orig_samples_per_step = 1, 7
     n_actions = np.unique(action_labels, axis=0).shape[0]
 
-    tr_gen = tr_batch_generator(te_features, te_labels,
-                                RESIZE_ISIZE, INPUT_ISIZE,
-                                n_actions, n_te_samples,
-                                n_orig_samples_per_step)
+    tr_gen = tr_batch_migenerator(te_features, te_labels,
+                                  RESIZE_ISIZE, INPUT_ISIZE,
+                                  n_actions, n_te_samples,
+                                  n_orig_samples_per_step)
 
     model.fit_generator(tr_gen, steps_per_epoch=n_te_samples,
                         epochs=epochs)
@@ -195,7 +150,7 @@ def additional_tr_pipline(model, te_features, te_labels):
 
 def classification_pipline(model, samples):
     n_actions = 20
-    if np.ndim(samples) == 2:
+    if np.ndim(samples) == 3:
         samples = samples[np.newaxis, :, :]
         labels = to_categorical(0, n_actions)
         labels = labels[np.newaxis, :]
