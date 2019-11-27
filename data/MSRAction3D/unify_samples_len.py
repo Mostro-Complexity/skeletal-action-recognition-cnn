@@ -28,18 +28,20 @@ def read_skeletal_data(src_file, n_action,
     for a in range(n_action):
         for s in range(n_subjects):
             for e in range(n_instances):
-                if skeletal_data_validity[e, s, a] == 1:
-                    features[count] = np.array(
-                        f[refs[e, s, a]])
+                if skeletal_data_validity[e, s, a] != 1:
+                    continue
 
-                    action_labels[count] = a+1
-                    subject_labels[count] = s+1
-                    instance_labels[count] = e+1
+                features[count] = np.array(
+                    f[refs[e, s, a]])
 
-                    count += 1
+                action_labels[count] = a+1
+                subject_labels[count] = s+1
+                instance_labels[count] = e+1
 
-    return features, action_labels,\
-        subject_labels, instance_labels
+                count += 1
+
+    return features[:count], action_labels[:count],\
+        subject_labels[:count], instance_labels[:count]
 
 
 def interpolation(sequence, body_model, n_desired_frames):
@@ -74,10 +76,38 @@ def interpolation(sequence, body_model, n_desired_frames):
         features = np.insert(features, body_model['hip_center_index']-1, np.zeros(
             (n_dim, n_desired_frames), np.float32), axis=1)
 
-        features = features.reshape((n_joints*n_dim, -1), order='F')
+        # features = features.reshape((n_joints*n_dim, -1), order='F')
         sequence[i] = features
 
     return sequence
+
+
+def frames_check(sequence, action_labels, subject_labels, instance_labels):
+    n_samples = sequence.size
+    samples_validity = np.empty(n_samples, dtype=np.bool)
+    for i in range(n_samples):
+        joint_locs = sequence[i]
+
+        n_dim, n_joints, n_given_frames = joint_locs.shape
+
+        frames_validity = np.empty(n_given_frames, dtype=np.bool)
+        for j in range(n_given_frames):
+            if np.isnan(joint_locs[:, :, j]).any():
+                frames_validity[j] = False
+            else:
+                frames_validity[j] = True
+
+        sequence[i] = joint_locs[:, :, frames_validity]
+
+        if np.sum(frames_validity) <= 10:
+            samples_validity[i] = False
+        else:
+            samples_validity[i] = True
+
+    return sequence[samples_validity], \
+        action_labels[samples_validity], \
+        subject_labels[samples_validity], \
+        instance_labels[samples_validity]
 
 
 if __name__ == "__main__":
@@ -87,6 +117,8 @@ if __name__ == "__main__":
     src_file = 'uniform_skeletal_data.mat'
     features, action_labels, subject_labels, instance_labels = read_skeletal_data(
         src_file, 20, 10, 3)
+    features, action_labels, subject_labels, instance_labels = frames_check(
+        features, action_labels, subject_labels, instance_labels)
 
     body_model = json.load(open('body_model.json', 'r'))
 
