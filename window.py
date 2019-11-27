@@ -26,7 +26,7 @@ from rgb_mapping import classification_pipline
 matplotlib.use("Qt5Agg")
 
 
-class MyMplCanvas(FigureCanvas):
+class Canvas(FigureCanvas):
     """这是一个窗口部件，即QWidget（当然也是FigureCanvasAgg）"""
 
     def __init__(self, parent=None, width=5, height=4, dpi=100):
@@ -46,11 +46,11 @@ class MyMplCanvas(FigureCanvas):
         pass
 
 
-class MyDynamicMplCanvas(MyMplCanvas):
+class DynamicCanvas(Canvas):
     """动态画布：每秒自动更新"""
 
     def __init__(self, *args, **kwargs):
-        MyMplCanvas.__init__(self, *args, **kwargs)
+        Canvas.__init__(self, *args, **kwargs)
         timer = QtCore.QTimer(self)
         timer.timeout.connect(self.update_figure)
         timer.start(100)
@@ -148,7 +148,7 @@ class ApplicationWindow(QMainWindow):
         self.main_widget = QWidget(self)
 
         # canvas
-        self.canvas = MyDynamicMplCanvas(
+        self.canvas = DynamicCanvas(
             self.main_widget, width=5, height=4, dpi=100)
 
         layout = QGridLayout(self.main_widget)
