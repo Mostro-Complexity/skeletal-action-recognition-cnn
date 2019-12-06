@@ -11,7 +11,6 @@ import numpy as np
 import scipy.stats as stat
 import tensorflow as tf
 from skimage import transform
-from sklearn.preprocessing import MinMaxScaler, StandardScaler
 from tensorflow import image
 from tensorflow.keras.layers import (BatchNormalization, Conv2D, Dense,
                                      Dropout, Flatten, Input, MaxPooling2D,
