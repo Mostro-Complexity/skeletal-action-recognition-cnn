@@ -1,35 +1,38 @@
+import json
+import os
 import random
 import sys
 
 import h5py
 import matplotlib
+import mpl_toolkits.mplot3d.axes3d as p3
 import numpy as np
 from keras.models import load_model
 from matplotlib.backends.backend_qt5agg import \
     FigureCanvasQTAgg as FigureCanvas
 from matplotlib.figure import Figure
+from mpl_toolkits.mplot3d.art3d import Line3DCollection
 from numpy import arange, pi, sin
 from PyQt5 import QtCore
 from PyQt5.QtCore import (QAbstractListModel, QModelIndex, QSize,
                           QStringListModel, Qt)
 from PyQt5.QtGui import QIcon
 from PyQt5.QtWidgets import (QAction, QApplication, QFileDialog, QGridLayout,
-                             QHBoxLayout, QListView, QMainWindow, QMenu,
-                             QMessageBox, QSizePolicy, QWidget, QLabel)
+                             QHBoxLayout, QLabel, QListView, QMainWindow,
+                             QMenu, QMessageBox, QSizePolicy, QWidget)
 
 from rgb_mapping import classification_pipline
-import os
+
 matplotlib.use("Qt5Agg")
 
 
-class MyMplCanvas(FigureCanvas):
+class Canvas(FigureCanvas):
     """这是一个窗口部件，即QWidget（当然也是FigureCanvasAgg）"""
 
     def __init__(self, parent=None, width=5, height=4, dpi=100):
         fig = Figure(figsize=(width, height), dpi=dpi)
-        self.axes = fig.add_subplot(111)
+        self.axes = p3.Axes3D(fig, azim=-90, elev=10)
         self.compute_initial_figure()
-
         #
         FigureCanvas.__init__(self, fig)
         self.setParent(parent)
@@ -43,33 +46,53 @@ class MyMplCanvas(FigureCanvas):
         pass
 
 
-class MyStaticMplCanvas(MyMplCanvas):
-    """静态画布：一条正弦线"""
-
-    def compute_initial_figure(self):
-        t = arange(0.0, 3.0, 0.01)
-        s = sin(2*pi*t)
-        self.axes.plot(t, s)
-
-
-class MyDynamicMplCanvas(MyMplCanvas):
-    """动态画布：每秒自动更新，更换一条折线。"""
+class DynamicCanvas(Canvas):
+    """动态画布：每秒自动更新"""
 
     def __init__(self, *args, **kwargs):
-        MyMplCanvas.__init__(self, *args, **kwargs)
+        Canvas.__init__(self, *args, **kwargs)
         timer = QtCore.QTimer(self)
         timer.timeout.connect(self.update_figure)
-        timer.start(1000)
+        timer.start(100)
 
     def compute_initial_figure(self):
-        self.axes.plot([0, 1, 2, 3], [1, 2, 0, 4], 'r')
+        self.points = self.axes.scatter([], [], [])
+
+        self.fcounter = 0
+        self.axes.set_xlim3d([1, 3])
+        self.axes.set_xlabel('X')
+
+        self.axes.set_ylim3d([1, 3])
+        self.axes.set_ylabel('Z')
+
+        self.axes.set_zlim3d([1, 3])
+        self.axes.set_zlabel('Y')
+        self.lc = Line3DCollection(segments=[])
+        self.axes.add_collection3d(self.lc)
+
+        f = json.load(open('data/MSRAction3D/body_model.json', 'r'))
+        self.bones = np.array(f['bones']) - 1
+
+        self.video = None
 
     def update_figure(self):
-        # 构建4个随机整数，位于闭区间[0, 10]
-        l = [random.randint(0, 10) for i in range(4)]
+        if self.video is None:
+            return
+        if self.fcounter > self.video.shape[0]:
+            self.fcounter = self.video.shape[0]-1
 
-        self.axes.plot([0, 1, 2, 3], l, 'r')
+        frame = self.video[self.fcounter]+2
+        self.points._offsets3d = (frame[:, 0], frame[:, 1], frame[:, 2])
+
+        lines = [np.array([frame[self.bones[i, 0]], frame[self.bones[i, 1]]])
+                 for i in range(self.bones.shape[0])]
+        self.lc.set_segments(lines)
+        self.fcounter += 1
         self.draw()
+
+    def set_video(self, video):
+        self.video = video
+        self.fcounter = 0
 
 
 class ApplicationWindow(QMainWindow):
@@ -89,6 +112,7 @@ class ApplicationWindow(QMainWindow):
         listView_1.setModel(listModel_1)
         listView_2 = QListView()
         listView_2.setModel(listModel_2)
+        listView_2.clicked.connect(self.selectFeature)
 
         # menu action
         file_menu.addAction(
@@ -123,26 +147,30 @@ class ApplicationWindow(QMainWindow):
         # window
         self.main_widget = QWidget(self)
 
+        # canvas
+        self.canvas = DynamicCanvas(
+            self.main_widget, width=5, height=4, dpi=100)
+
         layout = QGridLayout(self.main_widget)
         layout.addWidget(label_2, 0, 0)
         layout.addWidget(listView_1, 1, 0)
         layout.addWidget(label_1, 0, 1)
         layout.addWidget(listView_2, 1, 1)
         layout.addWidget(label_3, 0, 2)
-        layout.addWidget(MyDynamicMplCanvas(
-            self.main_widget, width=5, height=4, dpi=100), 1, 2)
+        layout.addWidget(self.canvas, 1, 2)
 
         self.main_widget.setFocus()
         self.setCentralWidget(self.main_widget)
         self.statusBar().showMessage("skeleton display program")
 
-        self.init_variables()
+        self.initVariables()
 
-    def init_variables(self):
+    def initVariables(self):
         self.models = dict()
 
     def importFeatures(self, listModel):
-        fname = QFileDialog.getOpenFileName(self, 'open feature file', '/')
+        fname = QFileDialog.getOpenFileName(
+            self, 'open feature file', 'data/MSRAction3D')
         if fname[0] is not None:
             f = h5py.File(fname[0], 'r')
             self.features = np.array([f[element]
@@ -152,7 +180,8 @@ class ApplicationWindow(QMainWindow):
             listModel.setStringList(idx)
 
     def importLabels(self, listModel):
-        fname = QFileDialog.getOpenFileName(self, 'open label file', '/')
+        fname = QFileDialog.getOpenFileName(
+            self, 'open label file', 'data/MSRAction3D')
         if fname[0] is not None:
             f = h5py.File(fname[0], 'r')
             features = np.array([f[element]
@@ -173,6 +202,9 @@ class ApplicationWindow(QMainWindow):
                 if listModel.insertRow(n_rows):
                     i = listModel.index(n_rows)
                     listModel.setData(i, mname)
+
+    def selectFeature(self, modelIndex):
+        self.canvas.set_video(self.features[modelIndex.row()])
 
     def quit(self):
         self.close()
