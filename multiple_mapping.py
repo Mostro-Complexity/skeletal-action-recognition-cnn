@@ -24,7 +24,7 @@ from sklearn.preprocessing import MinMaxScaler, StandardScaler
 from util.dataset_processing import rand_perm_dataset, split_dataset
 from util.preprocessing import (flip_img_horizontal, random_select_patch,
                                 standardize_img)
-from util.training import (te_psbatch_generator, tr_x_generator, tr_psbatch_generator,
+from util.training import (te_psbatch_generator, tr_psbatch_generator,
                            val_psbatch_generator)
 
 RESIZE_ISIZE = (60, 60, 3)
