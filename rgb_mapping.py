@@ -3,21 +3,24 @@
 acc稳定在0.7到0.8之间
 
 """
+import json
+
 import cv2
 import h5py
+import hdf5storage
 import numpy as np
 import scipy.stats as stat
-import json
 import tensorflow as tf
+from skimage import transform
+from tensorflow import image
 from tensorflow.keras.initializers import TruncatedNormal, Zeros
-from tensorflow.keras.layers import Conv2D, Dense, Dropout, Flatten, MaxPooling2D, Input, concatenate
-from tensorflow.keras.layers import BatchNormalization
-from tensorflow.keras.models import Sequential, Model
+from tensorflow.keras.layers import (BatchNormalization, Conv2D, Dense,
+                                     Dropout, Flatten, Input, MaxPooling2D,
+                                     concatenate)
+from tensorflow.keras.models import Model, Sequential
 from tensorflow.keras.optimizers import SGD
 from tensorflow.keras.regularizers import l1, l2
-from tensorflow import image
 from tensorflow.keras.utils import plot_model, to_categorical
-from skimage import transform
 
 from util.dataset_processing import rand_perm_dataset, split_dataset
 from util.preprocessing import (flip_img_horizontal, random_select_patch,
@@ -87,7 +90,7 @@ def training_pipline(features, subject_labels, action_labels, tr_subjects, te_su
     n_te_samples = te_labels.shape[0]
 
     '''-----------------------个人复现版------------------------'''
-    epochs = 1
+    epochs = 60
     # 7 orig samples is used and each orig sample gen 5 patches
     n_orig_samples_per_step, n_patches = 7, 5
     batch_size = n_orig_samples_per_step * n_patches
@@ -198,6 +201,8 @@ if __name__ == "__main__":
                                                      action_labels, tr_subjects, te_subjects)
 
     # model = additional_tr_pipline(model, te_features, te_labels)
+    hdf5storage.savemat('for_display/features', {u'features': te_features})
+    hdf5storage.savemat('for_display/labels', {u'action_labels': te_labels})
 
     print(classification_pipline(model, te_features[6]))
 

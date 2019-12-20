@@ -2,12 +2,12 @@ import json
 import os
 import random
 import sys
-
+import numba
 import h5py
 import matplotlib
 import mpl_toolkits.mplot3d.axes3d as p3
 import numpy as np
-from keras.models import load_model
+from tensorflow.keras.models import load_model
 from matplotlib.backends.backend_qt5agg import \
     FigureCanvasQTAgg as FigureCanvas
 from matplotlib.figure import Figure
@@ -24,6 +24,45 @@ from PyQt5.QtWidgets import (QAction, QApplication, QFileDialog, QGridLayout,
 from rgb_mapping import classification_pipline
 
 matplotlib.use("Qt5Agg")
+
+
+class StringLabeler(object):
+    def __init__(self, ldict):
+        assert type(ldict) is dict
+
+        values = list(ldict.values())
+        keys = list(ldict.keys())
+        self.content = np.char.asarray(values[0])
+        self.content = keys[0]+': ' + \
+            np.char.asarray(values[0]) + \
+            '\t'
+
+        for i in range(1, len(keys)):
+            label = keys[i]
+            self.content = self.content + label
+            self.content = self.content + ': ' + \
+                np.char.asarray(ldict[label].astype(str)) + \
+                '\t'
+
+    def addItems(self, ldict):
+        for k in ldict:
+            self.content = self.content + k
+            self.content = self.content + ': ' + \
+                np.char.asarray(ldict[k].astype(str)) + \
+                '\t'
+
+    def addSingleItem(self, ldict, idx):
+        for k in ldict:
+            self.content[idx] = self.content[idx]+k
+            self.content[idx] = self.content[idx] + ': ' + \
+                np.char.asarray(ldict[k].astype(str)) + \
+                '\t'
+
+    def clear(self):
+        self.content = np.char.chararray(self.content.size)
+
+    def getContent(self):
+        return self.content
 
 
 class Canvas(FigureCanvas):
@@ -78,7 +117,7 @@ class DynamicCanvas(Canvas):
     def update_figure(self):
         if self.video is None:
             return
-        if self.fcounter > self.video.shape[0]:
+        if self.fcounter >= self.video.shape[0]:
             self.fcounter = self.video.shape[0]-1
 
         frame = self.video[self.fcounter]+2
@@ -103,6 +142,7 @@ class ApplicationWindow(QMainWindow):
 
         # top-level menu
         file_menu = QMenu('&File', self)
+        func_nenu = QMenu('&Function', self)
         help_menu = QMenu('&Help', self)
 
         # list view
@@ -112,7 +152,10 @@ class ApplicationWindow(QMainWindow):
         listView_1.setModel(listModel_1)
         listView_2 = QListView()
         listView_2.setModel(listModel_2)
+
+        # select action
         listView_2.clicked.connect(self.selectFeature)
+        listView_1.clicked.connect(self.selectModel)
 
         # menu action
         file_menu.addAction(
@@ -123,10 +166,13 @@ class ApplicationWindow(QMainWindow):
             '&Import Models', lambda: self.importModels(listModel_1), QtCore.Qt.CTRL + QtCore.Qt.Key_M)
         file_menu.addAction('&Quit', self.quit,
                             QtCore.Qt.CTRL + QtCore.Qt.Key_Q)
+        func_nenu.addAction('&Predict', lambda: self.predict(listModel_2))
         help_menu.addAction('&About', self.about)
 
         # add menu
         self.menuBar().addMenu(file_menu)
+        self.menuBar().addSeparator()
+        self.menuBar().addMenu(func_nenu)
         self.menuBar().addSeparator()
         self.menuBar().addMenu(help_menu)
 
@@ -170,28 +216,30 @@ class ApplicationWindow(QMainWindow):
 
     def importFeatures(self, listModel):
         fname = QFileDialog.getOpenFileName(
-            self, 'open feature file', 'data/MSRAction3D')
+            self, 'open feature file', 'for_display')
         if fname[0] is not None:
             f = h5py.File(fname[0], 'r')
-            self.features = np.array([f[element]
-                                      for element in np.squeeze(f['features'][:])])
+            self.features = np.swapaxes(f['features'][:], 0, 3)
+            self.features = np.swapaxes(self.features, 1, 2)
             n_features = self.features.shape[0]
+
             idx = np.arange(n_features).astype(str)
-            listModel.setStringList(idx)
+            self.stringLabeler = StringLabeler({'ID': idx})
+            listModel.setStringList(self.stringLabeler.getContent())
 
     def importLabels(self, listModel):
         fname = QFileDialog.getOpenFileName(
-            self, 'open label file', 'data/MSRAction3D')
+            self, 'open label file', 'for_display')
         if fname[0] is not None:
             f = h5py.File(fname[0], 'r')
-            features = np.array([f[element]
-                                 for element in np.squeeze(f['features'][:])])
-            n_features = features.shape[0]
-            idx = np.arange(n_features).astype(str)
-            listModel.setStringList(idx)
+            self.te_labels = f['action_labels'][:, 0]
+
+            self.stringLabeler.addItems({'L': self.te_labels})
+            listModel.setStringList(self.stringLabeler.getContent())
 
     def importModels(self, listModel):
-        fpath = QFileDialog.getOpenFileName(self, 'open model file', '/')
+        fpath = QFileDialog.getOpenFileName(
+            self, 'open model file', 'for_display')
         for fp in fpath[:-1]:
             if fp is not None:
                 model = load_model(fp)
@@ -204,7 +252,20 @@ class ApplicationWindow(QMainWindow):
                     listModel.setData(i, mname)
 
     def selectFeature(self, modelIndex):
-        self.canvas.set_video(self.features[modelIndex.row()])
+        self.selectedfIndex = modelIndex.row()
+        self.selectedFeature = self.features[self.selectedfIndex]
+        self.canvas.set_video(self.selectedFeature)
+
+    def selectModel(self, modelIndex):
+        self.selectedModel = self.models[modelIndex.data()]
+
+    def predict(self, listModel):
+        pr_label = classification_pipline(
+            self.selectedModel, self.selectedFeature)
+
+        self.stringLabeler.addSingleItem({'P': pr_label},
+                                         self.selectedfIndex)
+        listModel.setStringList(self.stringLabeler.getContent())
 
     def quit(self):
         self.close()
